@@ -72,12 +72,14 @@ class Schema(object):
     validate and optionally convert the value.
     """
 
-    def __init__(self, schema):
+    def __init__(self, *schemas):
         """Create a new schema.
 
         :param schema: Validation schema. See :module:`validation` for details.
         """
-        self.schema = schema
+        self.schema = schemas[0]
+        for schema in schemas[1:]:
+            self.schema = self._merge_schemas(self.schema, schema)
 
     def __call__(self, data):
         """Validate data against this schema."""
@@ -106,6 +108,18 @@ class Schema(object):
 
     @classmethod
     def _validate_type(cls, schema, data, path):
+        """Validates that data is of a specific built-in type.
+
+        This method determines if data is a specific built-in Python type. If
+        the data is not the type specified by schema, an Invalid error is
+        returned with a message specifying the type of data expected.
+
+        :param schema: The built-in data type, such as str, int, etc.
+        :param data: The data to validate.
+        :param path: The path of the passed in data.
+        """
+        if data is Undefined:
+            return data, []
         if not isinstance(data, schema):
             error = Invalid("Expected {0}".format(schema.__name__), path)
             return error, [error]
@@ -118,6 +132,12 @@ class Schema(object):
         except ValueError as e:
             ex = Invalid("Invalid value given", path)
             return ex, [ex]
+        except InvalidGroup as e:
+            errors = []
+            for invalid in e.errors:
+                errors.append(Invalid(invalid.message, path + invalid.path))
+            modified_ex = InvalidGroup(errors)
+            return modified_ex, errors
         except Invalid as e:
             modified_ex = Invalid(e.message, path + e.path)
             return modified_ex, [modified_ex]
@@ -137,7 +157,8 @@ class Schema(object):
             new_path = path + [key]
             new_data = Undefined if key not in data else data[key]
             retval, error = cls._validate(value, new_data, new_path)
-            output[key] = retval
+            if retval is not Undefined:
+                output[key] = retval
             errors += error
         return output, errors
 

@@ -2,12 +2,12 @@
 # pylint: disable-all
 from __future__ import division, unicode_literals
 
-import math
 import unittest
 from mock import Mock, call, patch
 
 from jsonbouncer import (
     Schema, Invalid, InvalidGroup, Undefined, SchemaError, Any, All)
+from validators import Coerce
 
 
 class TestUndefined(unittest.TestCase):
@@ -130,6 +130,14 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(data, False)
         self.assertEqual(errors, [])
 
+    def test_validate_type_returns_undefined_when_passed_undefined(self):
+        data, errors = Schema._validate_type(unicode, Undefined, [])
+        self.assertEqual(data, Undefined)
+        self.assertEqual(errors, [])
+        data, errors = Schema._validate_type(int, Undefined, [])
+        self.assertEqual(data, Undefined)
+        self.assertEqual(errors, [])
+
     def test_validate_type_returns_error_and_error_list_on_invalid_data(self):
         with patch("jsonbouncer.jsonbouncer.Invalid") as mocked:
             data, errors = Schema._validate_type(unicode, 1, [])
@@ -232,7 +240,7 @@ class TestSchema(unittest.TestCase):
                 call(int, Undefined, ["d"])
             ], any_order=True)
 
-    def test_validate_dict_returns_values_from_validation(self):
+    def test_validate_dict_returns_defined_values_from_validation(self):
         def mock_return(schema, data, path):
             return data, []
 
@@ -240,7 +248,7 @@ class TestSchema(unittest.TestCase):
         with patch.object(Schema, "_validate", mocked):
             schema = {"a": int, "b": int, "c": int, "d": int}
             original_data = {"a": 1, "c": 2, "d": 3}
-            expected_data = {"a": 1, "b": Undefined, "c": 2, "d": 3}
+            expected_data = {"a": 1, "c": 2, "d": 3}
             val, errors = Schema._validate_dict(schema, original_data, [])
             self.assertEqual(val, expected_data)
             self.assertEqual(errors, [])
@@ -255,7 +263,7 @@ class TestSchema(unittest.TestCase):
         with patch.object(Schema, "_validate", mocked):
             schema = {"a": int, "b": int, "c": int, "d": int}
             original_data = {"a": 1, "c": 3, "d": 4}
-            expected_data = {"a": 1, "b": Undefined, "c": "err3", "d": "err4"}
+            expected_data = {"a": 1, "c": "err3", "d": "err4"}
             val, errors = Schema._validate_dict(schema, original_data, [])
             self.assertEqual(val, expected_data)
             self.assertEqual(errors, [3, 4])
@@ -436,6 +444,18 @@ class TestSchema(unittest.TestCase):
         val, errors = Schema._validate_function(func, "abc", [])
         self.assertEqual(val.message, "Invalid value given")
 
+    def test_validate_function_catches_and_processes_invalid_groups(self):
+        invalid_group = InvalidGroup([
+            Invalid("abc"),
+            Invalid("def", ["a", 1])
+        ])
+        func = Mock(side_effect=invalid_group)
+        val, errors = Schema._validate_function(func, "abc", ["e"])
+        self.assertEqual(map(str, errors), [
+            "abc @ data[e]",
+            "def @ data[e][a][1]"
+        ])
+
     def test_validate_function_prepends_the_path_to_any_invalid_raised(self):
         invalid = Invalid("abc")
         func = Mock(side_effect=invalid)
@@ -448,6 +468,11 @@ class TestSchema(unittest.TestCase):
         func = Mock(side_effect=ValueError)
         val, errors = Schema._validate_function(func, "abc", ["a"])
         self.assertEqual(val.path, ["a"])
+
+
+class TestSchemaMerge(unittest.TestCase):
+    def test_merge_calls_the_correct_merge_function_based_on_the_type(self):
+        pass
 
 
 class TestAnyFunction(unittest.TestCase):
@@ -954,3 +979,83 @@ class TestAllFunction(unittest.TestCase):
         with self.assertRaises(Invalid) as cm:
             allfunc(0)
         self.assertEqual(cm.exception.message, "A value is required")
+
+
+class TestCoerce(unittest.TestCase):
+    def test_coerce_returns_values_based_on_passed_in_type(self):
+        c = Coerce(int)
+        self.assertEqual(c("0"), 0)
+        self.assertEqual(c("1"), 1)
+        self.assertEqual(c(1234), 1234)
+
+        c = Coerce(unicode)
+        self.assertEqual(c(0), "0")
+        self.assertEqual(c(False), "False")
+        self.assertEqual(c("abc"), "abc")
+
+    def test_coerce_raises_an_invalid_exception_on_bad_data(self):
+        with self.assertRaises(Invalid) as cm:
+            c = Coerce(int)
+            c("abc")
+        self.assertEqual(cm.exception.message, "expected int")
+        self.assertEqual(cm.exception.path, [])
+
+        with self.assertRaises(Invalid) as cm:
+            c = Coerce(int)
+            c(None)
+        self.assertEqual(cm.exception.message, "expected int")
+        self.assertEqual(cm.exception.path, [])
+
+    def test_coerce_does_not_coerce_undefined(self):
+        c = Coerce(int)
+        self.assertEqual(c(Undefined), Undefined)
+        c = Coerce(bool)
+        self.assertEqual(c(Undefined), Undefined)
+        c = Coerce(unicode)
+        self.assertEqual(c(Undefined), Undefined)
+
+
+class TestIntegration(unittest.TestCase):
+    def test_basic_integration_test(self):
+        s = Schema({
+            "abc": All(Coerce(str), when_empty=Invalid),
+            "def": All(int, when_empty=Invalid)
+        })
+        with self.assertRaises(InvalidGroup) as cm:
+            s({})
+        self.assertEqual(
+            map(str, cm.exception.errors),
+            [
+                "A value is required @ data[abc]",
+                "A value is required @ data[def]"
+            ],
+        )
+        a = s({"abc": 1, "def": 2})
+        self.assertEqual(a, {"abc": "1", "def": 2})
+
+        s = Schema(All({
+            "abc": Coerce(str),
+            "def": int
+        }))
+        with self.assertRaises(InvalidGroup) as cm:
+            s({"def": "abc"})
+        self.assertEqual(
+            map(str, cm.exception.errors),
+            [
+                "Expected int @ data[def]"
+            ]
+        )
+
+        s = Schema(All({
+            "abc": All(Coerce(str), when_empty=Invalid),
+            "def": All(int, when_empty=Invalid)
+        }))
+        with self.assertRaises(InvalidGroup) as cm:
+            s({})
+        self.assertEqual(
+            map(str, cm.exception.errors),
+            [
+                "A value is required @ data[abc]",
+                "A value is required @ data[def]"
+            ],
+        )
