@@ -24,16 +24,26 @@ class TestInvalid(unittest.TestCase):
         instance = Invalid("Invalid message")
         self.assertEqual(instance.message, "Invalid message")
 
+    def test_creating_an_invalid_exception_saves_the_passed_in_data(self):
+        instance = Invalid("")
+        self.assertIsNone(instance.data)
+        instance = Invalid("", 123)
+        self.assertEqual(instance.data, 123)
+        instance = Invalid("", data=123)
+        self.assertEqual(instance.data, 123)
+
     def test_creating_an_invalid_exception_saves_the_passed_in_path(self):
         instance = Invalid("")
         self.assertEqual(instance.path, [])
-        instance = Invalid("", [1, "b", 3])
+        instance = Invalid("", None, [1, "b", 3])
+        self.assertEqual(instance.path, [1, "b", 3])
+        instance = Invalid("", path=[1, "b", 3])
         self.assertEqual(instance.path, [1, "b", 3])
 
     def test_invalid_exception_prints_path_if_given(self):
         instance = Invalid("Invalid message")
         self.assertEqual(str(instance), "Invalid message")
-        instance = Invalid("Invalid message", [1, "b", 3])
+        instance = Invalid("Invalid message", path=[1, "b", 3])
         self.assertEqual(str(instance), "Invalid message @ data[1][b][3]")
 
 
@@ -42,6 +52,14 @@ class TestInvalidGroup(unittest.TestCase):
         instance = InvalidGroup([Invalid("a"), Invalid("b")])
         self.assertEqual(str(instance), "a")
 
+    def test_creating_an_invalid_group_saves_the_passed_in_errors(self):
+        instance = InvalidGroup([1, 2])
+        self.assertEqual(instance.errors, [1, 2])
+
+    def test_creating_an_invalid_group_saves_the_passed_in_data(self):
+        instance = InvalidGroup([], "abc")
+        self.assertEqual(instance.data, "abc")
+
 
 class TestSchema(unittest.TestCase):
     def test_creating_a_schema_saves_the_passed_in_schema(self):
@@ -49,28 +67,31 @@ class TestSchema(unittest.TestCase):
         instance = Schema(schema)
         self.assertEqual(instance.schema, {"a": "b", "k": "l", "y": 3})
 
-    def test_calling_a_schema_calls_validate(self):
-        mocked = Mock(return_value=(1, []))
-        with patch.object(Schema, "_validate", mocked):
-            instance = Schema({"a": int})
-            instance({"a": 1})
-            mocked.assert_called_once_with({"a": int}, {"a": 1}, [])
-
     def test_calling_a_schema_returns_data_when_data_is_valid(self):
-        mocked = Mock(return_value=(1, []))
+        mocked = Mock(return_value=1)
         with patch.object(Schema, "_validate", mocked):
             instance = Schema({"a": int})
             retval = instance({"a": 1})
             self.assertEqual(retval, 1)
 
     def test_calling_a_schema_raises_invalid_group_when_data_is_invalid(self):
-        mocked = Mock(return_value=(1, [1, 2, 3]))
+        invalid = Invalid("abc")
+        mocked = Mock(side_effect=invalid)
         with patch.object(Schema, "_validate", mocked):
             with self.assertRaises(InvalidGroup) as cm:
                 instance = Schema({"a": int})
                 instance({"a": 1})
-            self.assertEqual(cm.exception.errors, [1, 2, 3])
+            self.assertEqual(map(str, cm.exception.errors), ["abc"])
+        invalid = InvalidGroup([Invalid("def"), Invalid("ghi")])
+        mocked = Mock(side_effect=invalid)
+        with patch.object(Schema, "_validate", mocked):
+            with self.assertRaises(InvalidGroup) as cm:
+                instance = Schema({"a": int})
+                instance({"a": 1})
+            self.assertEqual(map(str, cm.exception.errors), ["def", "ghi"])
 
+
+class TestSchemaValidate(unittest.TestCase):
     def test_validate_raises_schema_error_when_a_bad_schema_is_passed(self):
         with self.assertRaises(SchemaError) as cm:
             instance = Schema("a")
@@ -119,75 +140,104 @@ class TestSchema(unittest.TestCase):
             Schema._validate(str, data, [])
             mocked.assert_called_once_with(unicode, data, [])
 
-    def test_validate_type_returns_value_on_valid_data(self):
-        data, errors = Schema._validate_type(unicode, "", [])
-        self.assertEqual(data, "")
-        self.assertEqual(errors, [])
-        data, errors = Schema._validate_type(int, 0, [])
-        self.assertEqual(data, 0)
-        self.assertEqual(errors, [])
-        data, errors = Schema._validate_type(bool, False, [])
-        self.assertEqual(data, False)
-        self.assertEqual(errors, [])
+
+class TestSchemaValidateType(unittest.TestCase):
+    def test_validate_type_returns_the_data_when_valid(self):
+        self.assertEqual(Schema._validate_type(unicode, "", []), "")
+        self.assertEqual(Schema._validate_type(int, 0, []), 0)
+        self.assertEqual(Schema._validate_type(bool, False, []), False)
 
     def test_validate_type_returns_undefined_when_passed_undefined(self):
-        data, errors = Schema._validate_type(unicode, Undefined, [])
-        self.assertEqual(data, Undefined)
-        self.assertEqual(errors, [])
-        data, errors = Schema._validate_type(int, Undefined, [])
-        self.assertEqual(data, Undefined)
-        self.assertEqual(errors, [])
+        self.assertEqual(
+            Schema._validate_type(unicode, Undefined, []), Undefined)
+        self.assertEqual(
+            Schema._validate_type(int, Undefined, []), Undefined)
 
-    def test_validate_type_returns_error_and_error_list_on_invalid_data(self):
-        with patch("jsonbouncer.jsonbouncer.Invalid") as mocked:
-            data, errors = Schema._validate_type(unicode, 1, [])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            data, errors = Schema._validate_type(int, "abc", [])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            data, errors = Schema._validate_type(bool, None, [])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-
-    def test_validate_type_errors_have_message_and_path_filled_in(self):
-        with patch("jsonbouncer.jsonbouncer.Invalid") as mocked:
+    def test_validate_type_raises_invalid_on_invalid_data(self):
+        with self.assertRaises(Invalid) as cm:
             Schema._validate_type(unicode, 1, [])
-            mocked.assert_called_once_with("Expected unicode", [])
-            mocked.reset_mock()
-            Schema._validate_type(int, None, [1])
-            mocked.assert_called_once_with("Expected int", [1])
-            mocked.reset_mock()
-            Schema._validate_type(bool, "", ["a", 0, "b"])
-            mocked.assert_called_once_with("Expected bool", ["a", 0, "b"])
+        self.assertEqual(str(cm.exception), "Expected unicode")
+        self.assertEqual(cm.exception.data, 1)
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_type(int, "abc", [1])
+        self.assertEqual(str(cm.exception), "Expected int @ data[1]")
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_type(bool, None, ["a", 0, "b"])
+        self.assertEqual(str(cm.exception), "Expected bool @ data[a][0][b]")
+        self.assertEqual(cm.exception.data, None)
 
-    def test_validate_dict_returns_invalid_if_not_given_a_dictionary(self):
-        with patch("jsonbouncer.jsonbouncer.Invalid") as mocked:
-            data, errors = Schema._validate_dict({}, [], [])
-            mocked.assert_called_once_with("Expected an object", [])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            mocked.reset_mock()
-            data, errors = Schema._validate_dict({}, Undefined, [1])
-            mocked.assert_called_once_with("Expected an object", [1])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            mocked.reset_mock()
-            data, errors = Schema._validate_dict({}, None, ["a", "b"])
-            mocked.assert_called_once_with("Expected an object", ["a", "b"])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
+
+class TestSchemaValidateDict(unittest.TestCase):
+    # Invalid when data is not a dict
+    # Unmodified when schema is empty
+    # Returns dict with munged values if valid
+    # Raises InvalidGroup error if one or more entries is invalid
+    def test_validate_dict_raises_invalid_if_not_given_a_dictionary(self):
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_dict({}, [], [])
+        self.assertEqual(str(cm.exception), "Expected an object")
+        self.assertEqual(cm.exception.data, [])
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_dict({}, Undefined, [0])
+        self.assertEqual(str(cm.exception), "Expected an object @ data[0]")
+        self.assertEqual(cm.exception.data, Undefined)
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_dict({}, None, ["a", "b"])
+        self.assertEqual(str(cm.exception), "Expected an object @ data[a][b]")
+        self.assertEqual(cm.exception.data, None)
 
     def test_validate_dict_returns_all_data_if_schema_is_empty(self):
-        data, errors = Schema._validate_dict({}, {"a": 1, "b": None}, [])
-        self.assertEqual(data, {"a": 1, "b": None})
-        self.assertEqual(errors, [])
-        data, errors = Schema._validate_dict({}, {"a": None}, [])
-        self.assertEqual(data, {"a": None})
-        self.assertEqual(errors, [])
+        self.assertEqual(
+            Schema._validate_dict({}, {"a": 1, "b": None}, []),
+            {"a": 1, "b": None})
+
+    def test_validate_dict_returns_defined_values_from_validation(self):
+        def mock_return(schema, data, path):
+            return data
+        mocked = Mock(side_effect=mock_return)
+        with patch.object(Schema, "_validate", mocked):
+            schema = {"a": int, "b": int, "c": int, "d": int}
+            data = {"a": 1, "c": 2, "d": 3}
+            self.assertEqual(Schema._validate_dict(schema, data, []), data)
+
+    def test_validate_dict_raises_invalid_group_for_invalid_data(self):
+        def mock_return(schema, data, path):
+            if data is Undefined:
+                return Undefined
+            if not isinstance(data, schema):
+                raise Invalid("err", data, path)
+            return data
+        mocked = Mock(side_effect=mock_return)
+        with patch.object(Schema, "_validate", mocked):
+            with self.assertRaises(InvalidGroup) as cm:
+                schema = {"a": int, "b": int, "c": int, "d": int}
+                data = {"a": None, "b": 1, "c": 2}
+                Schema._validate_dict(schema, data, [])
+            self.assertEqual(map(str, cm.exception.errors), ["err @ data[a]"])
+            self.assertEqual([e.data for e in cm.exception.errors], [None])
+            with self.assertRaises(InvalidGroup) as cm:
+                schema = {"a": int, "b": int, "c": int, "d": int}
+                data = {"a": 1, "c": 1.1, "d": "abc"}
+                Schema._validate_dict(schema, data, [])
+            self.assertEqual(
+                map(str, cm.exception.errors),
+                ["err @ data[c]", "err @ data[d]"])
+            self.assertEqual(
+                [e.data for e in cm.exception.errors], [1.1, "abc"])
+            with self.assertRaises(InvalidGroup) as cm:
+                schema = {"a": int, "b": int, "c": int, "d": int}
+                data = {"a": 1, "b": 2, "c": 2.0, "d": None}
+                Schema._validate_dict(schema, data, ["x", 1])
+            self.assertEqual(
+                map(str, cm.exception.errors),
+                ["err @ data[x][1][c]", "err @ data[x][1][d]"])
+            self.assertEqual(
+                [e.data for e in cm.exception.errors], [2.0, None])
 
     def test_validate_dict_calls_validate_once_for_each_key(self):
-        mocked = Mock(return_value=({}, []))
+        # TODO: Should we be checking this, or just checking the output?
+        mocked = Mock(return_value={})
         with patch.object(Schema, "_validate", mocked):
             schema = {"a": unicode, "c": int, "e": unicode, "g": bool}
             data = {"a": "b", "c": 4, "e": "f", "g": True}
@@ -200,7 +250,9 @@ class TestSchema(unittest.TestCase):
             ], any_order=True)
 
     def test_validate_dict_appends_the_key_to_the_current_path(self):
-        mocked = Mock(return_value=({}, []))
+        # TODO: Should we be checking this, or just the output?
+        # TODO: If we do decide to keep this, it should be combined with above
+        mocked = Mock(return_value={})
         with patch.object(Schema, "_validate", mocked):
             schema = {"a": int, "b": int, "c": int}
             data = {"a": 1, "b": 2, "c": 3}
@@ -227,8 +279,8 @@ class TestSchema(unittest.TestCase):
                 call(int, 3, ["f", "g", 1, "c"])
             ], any_order=True)
 
-    def test_validate_dict_sets_undefined_if_a_value_isnt_in_data(self):
-        mocked = Mock(return_value=({}, []))
+    def test_validate_dict_passes_undefined_if_a_value_isnt_in_data(self):
+        mocked = Mock(return_value={})
         with patch.object(Schema, "_validate", mocked):
             data = {"a": 1, "c": 2}
             schema = {"a": int, "b": int, "c": int, "d": int}
@@ -240,61 +292,62 @@ class TestSchema(unittest.TestCase):
                 call(int, Undefined, ["d"])
             ], any_order=True)
 
-    def test_validate_dict_returns_defined_values_from_validation(self):
-        def mock_return(schema, data, path):
-            return data, []
 
-        mocked = Mock(side_effect=mock_return)
-        with patch.object(Schema, "_validate", mocked):
-            schema = {"a": int, "b": int, "c": int, "d": int}
-            original_data = {"a": 1, "c": 2, "d": 3}
-            expected_data = {"a": 1, "c": 2, "d": 3}
-            val, errors = Schema._validate_dict(schema, original_data, [])
-            self.assertEqual(val, expected_data)
-            self.assertEqual(errors, [])
-
-    def test_validate_dict_appends_and_returns_errors_from_validation(self):
-        def mock_return(schema, data, path):
-            if data != Undefined and data > 2:
-                return "err{0}".format(data), [data]
-            return data, []
-
-        mocked = Mock(side_effect=mock_return)
-        with patch.object(Schema, "_validate", mocked):
-            schema = {"a": int, "b": int, "c": int, "d": int}
-            original_data = {"a": 1, "c": 3, "d": 4}
-            expected_data = {"a": 1, "c": "err3", "d": "err4"}
-            val, errors = Schema._validate_dict(schema, original_data, [])
-            self.assertEqual(val, expected_data)
-            self.assertEqual(errors, [3, 4])
-
-    def test_validate_list_returns_invalid_if_not_given_a_list(self):
-        with patch("jsonbouncer.jsonbouncer.Invalid") as mocked:
-            data, errors = Schema._validate_list([], {}, [])
-            mocked.assert_called_once_with("Expected a list", [])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            mocked.reset_mock()
-            data, errors = Schema._validate_list([], Undefined, [1])
-            mocked.assert_called_once_with("Expected a list", [1])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
-            mocked.reset_mock()
-            data, errors = Schema._validate_list([], None, ["a", "b"])
-            mocked.assert_called_once_with("Expected a list", ["a", "b"])
-            self.assertEqual(data, mocked())
-            self.assertEqual(errors, [mocked()])
+class TestSchemaValidateList(unittest.TestCase):
+    def test_validate_list_raises_invalid_if_not_given_a_list(self):
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_list([], {}, [])
+        self.assertEqual(str(cm.exception), "Expected a list")
+        self.assertEqual(cm.exception.data, {})
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_list([], Undefined, [1])
+        self.assertEqual(str(cm.exception), "Expected a list @ data[1]")
+        self.assertEqual(cm.exception.data, Undefined)
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_list([], None, ["a", "b"])
+        self.assertEqual(str(cm.exception), "Expected a list @ data[a][b]")
+        self.assertEqual(cm.exception.data, None)
 
     def test_validate_list_returns_unmodified_data_when_schema_is_empty(self):
-        data, errors = Schema._validate_list([], [1, 2, 3], [])
-        self.assertEqual(data, [1, 2, 3])
-        self.assertEqual(errors, [])
-        data, errors = Schema._validate_list([], ["a", [], False], [])
-        self.assertEqual(data, ["a", [], False])
-        self.assertEqual(errors, [])
+        self.assertEqual(
+            Schema._validate_list([], [1, 2, 3], []), [1, 2, 3])
 
+    def test_validate_list_returns_values_from_validation(self):
+        def mock_return(schema, data, path):
+            if not isinstance(data, schema):
+                raise Invalid("", data, path)
+            if schema == unicode:
+                return "{0}r".format(data)
+            return data + 1
+        mocked = Mock(side_effect=mock_return)
+        with patch.object(Schema, "_validate", mocked):
+            schema = [unicode, int]
+            data = ["z", 1, "y", 2, "x", 3, "w"]
+            val = Schema._validate_list(schema, data, [])
+            self.assertEqual(val, ["zr", 2, "yr", 3, "xr", 4, "wr"])
+
+    def test_validate_list_raises_invalid_group_on_invalid_data(self):
+        def mock_return(schema, data, path):
+            if not isinstance(data, schema):
+                raise Invalid("err", data, path)
+            return data
+        mocked = Mock(side_effect=mock_return)
+        with patch.object(Schema, "_validate", mocked):
+            with self.assertRaises(InvalidGroup) as cm:
+                schema = [unicode, int]
+                data = [1, "a", 1.2, "b", 2, None]
+                Schema._validate_list(schema, data, ["a", 2])
+            ex = cm.exception
+            self.assertEqual(
+                map(str, ex.errors),
+                ["err @ data[a][2][2]", "err @ data[a][2][5]"])
+            self.assertEqual([e.data for e in ex.errors], [1.2, None])
+            self.assertEqual(
+                ex.data, [1, "a", ex.errors[0], "b", 2, ex.errors[1]])
+
+    # TODO: Not sure these are necessary. Should be tested in above tests
     def test_validate_list_calls_validate_for_each_data_entry(self):
-        mocked = Mock(return_value=(1, []))
+        mocked = Mock(return_value=1)
         with patch.object(Schema, "_validate", mocked):
             Schema._validate_list([int], [], [])
             self.assertFalse(mocked.called)
@@ -312,10 +365,8 @@ class TestSchema(unittest.TestCase):
     def test_validate_list_calls_validate_for_schema_values_as_necessary(self):
         def mock_return(schema, data, path):
             if not isinstance(data, schema):
-                error = Invalid("")
-                return error, [error]
-            return data, []
-
+                raise Invalid("")
+            return data
         mocked = Mock(side_effect=mock_return)
         with patch.object(Schema, "_validate", mocked):
             Schema._validate_list([int, unicode], [], [])
@@ -330,7 +381,8 @@ class TestSchema(unittest.TestCase):
             Schema._validate_list([int, unicode], [1], [])
             mocked.assert_called_once_with(int, 1, [0])
             mocked.reset_mock()
-            Schema._validate_list([int, unicode], [None], [])
+            with self.assertRaises(InvalidGroup):
+                Schema._validate_list([int, unicode], [None], [])
             mocked.assert_has_calls([
                 call(int, None, [0]),
                 call(unicode, None, [0])
@@ -339,9 +391,8 @@ class TestSchema(unittest.TestCase):
     def test_validate_list_calls_validate_for_each_schema_data_combo(self):
         def mock_return(schema, data, path):
             if not isinstance(data, schema):
-                error = Invalid("")
-                return error, [error]
-            return data, []
+                raise Invalid("")
+            return data
 
         mocked = Mock(side_effect=mock_return)
         with patch.object(Schema, "_validate", mocked):
@@ -353,7 +404,8 @@ class TestSchema(unittest.TestCase):
                 call(unicode, "b", [1])
             ])
             mocked.reset_mock()
-            Schema._validate_list([int, unicode], ["a", 1, None], [])
+            with self.assertRaises(InvalidGroup):
+                Schema._validate_list([int, unicode], ["a", 1, None], [])
             mocked.assert_has_calls([
                 call(int, "a", [0]),
                 call(unicode, "a", [0]),
@@ -369,7 +421,7 @@ class TestSchema(unittest.TestCase):
             ])
 
     def test_validate_list_appends_the_entry_index_to_the_current_path(self):
-        mocked = Mock(return_value=(1, []))
+        mocked = Mock(return_value=1)
         with patch.object(Schema, "_validate", mocked):
             data = ["a", "b", "c"]
             Schema._validate_list([unicode], data, [])
@@ -393,34 +445,8 @@ class TestSchema(unittest.TestCase):
                 call(unicode, "c", ["b", "c", 2, 2])
             ])
 
-    def test_validate_list_returns_values_from_validation(self):
-        def mock_return(schema, data, path):
-            return data, []
 
-        mocked = Mock(side_effect=mock_return)
-        with patch.object(Schema, "_validate", mocked):
-            schema = [unicode, int]
-            original_data = [1, "a", 2, 3, "b"]
-            expected_data = [1, "a", 2, 3, "b"]
-            val, errors = Schema._validate_list(schema, original_data, [])
-            self.assertEqual(val, expected_data)
-            self.assertEqual(errors, [])
-
-    def test_validate_list_appends_and_returns_errors_from_validation(self):
-        def mock_return(schema, data, path):
-            if isinstance(data, int) and data > 2:
-                return "err{0}".format(data), [data]
-            return data, []
-
-        mocked = Mock(side_effect=mock_return)
-        with patch.object(Schema, "_validate", mocked):
-            schema = [unicode, int]
-            original_data = [1, "a", 3, "b", 4, 2]
-            expected_data = [1, "a", "err3", "b", "err4", 2]
-            val, errors = Schema._validate_list(schema, original_data, [])
-            self.assertEqual(val, expected_data)
-            self.assertEqual(errors, [3, 4])
-
+class TestSchemaValidateFunction(unittest.TestCase):
     def test_validate_function_calls_the_function(self):
         func = Mock()
         Schema._validate_function(func, "abc", [])
@@ -428,46 +454,48 @@ class TestSchema(unittest.TestCase):
 
     def test_validate_function_returns_the_value_from_the_function(self):
         func = Mock(return_value=1)
-        val, errors = Schema._validate_function(func, "abc", [])
-        self.assertEqual(val, 1)
-        self.assertEqual(errors, [])
+        self.assertEqual(Schema._validate_function(func, "abc", []), 1)
 
-    def test_validate_function_catches_and_returns_invalid_exceptions(self):
+    def test_validate_function_catches_and_raises_invalid(self):
         invalid = Invalid("abc")
         func = Mock(side_effect=invalid)
-        val, errors = Schema._validate_function(func, "abc", [])
-        self.assertEqual(val.message, "abc")
-        self.assertEqual(errors[0].message, "abc")
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_function(func, 2, [])
+        self.assertEqual(str(cm.exception), "abc")
+        self.assertEqual(cm.exception.data, 2)
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_function(func, 3, [1, "a"])
+        self.assertEqual(str(cm.exception), "abc @ data[1][a]")
+        self.assertEqual(cm.exception.data, 3)
 
-    def test_validate_function_catches_value_errors_and_returns_invalid(self):
-        func = Mock(side_effect=ValueError)
-        val, errors = Schema._validate_function(func, "abc", [])
-        self.assertEqual(val.message, "Invalid value given")
-
-    def test_validate_function_catches_and_processes_invalid_groups(self):
-        invalid_group = InvalidGroup([
-            Invalid("abc"),
-            Invalid("def", ["a", 1])
-        ])
+    def test_validate_function_catches_and_raises_invalid_group(self):
+        invalid_group = InvalidGroup(
+            [Invalid("abc"), Invalid("def", path=[3])])
         func = Mock(side_effect=invalid_group)
-        val, errors = Schema._validate_function(func, "abc", ["e"])
-        self.assertEqual(map(str, errors), [
-            "abc @ data[e]",
-            "def @ data[e][a][1]"
-        ])
+        with self.assertRaises(InvalidGroup) as cm:
+            Schema._validate_function(func, 2, [])
+        ex = cm.exception
+        self.assertEqual(map(str, ex.errors), ["abc", "def @ data[3]"])
+        self.assertEqual([e.data for e in ex.errors], [2, 2])
+        self.assertEqual(ex.data, 2)
+        with self.assertRaises(InvalidGroup) as cm:
+            Schema._validate_function(func, 3, [1, "a"])
+        ex = cm.exception
+        self.assertEqual(
+            map(str, ex.errors), ["abc @ data[1][a]", "def @ data[1][a][3]"])
+        self.assertEqual([e.data for e in ex.errors], [3, 3])
+        self.assertEqual(ex.data, 3)
 
-    def test_validate_function_prepends_the_path_to_any_invalid_raised(self):
-        invalid = Invalid("abc")
-        func = Mock(side_effect=invalid)
-        val, errors = Schema._validate_function(func, "abc", ["a"])
-        self.assertEqual(val.path, ["a"])
-        invalid = Invalid("abc", ["b"])
-        func = Mock(side_effect=invalid)
-        val, errors = Schema._validate_function(func, "abc", ["a"])
-        self.assertEqual(val.path, ["a", "b"])
+    def test_validate_function_catches_value_errors_and_raises_invalid(self):
         func = Mock(side_effect=ValueError)
-        val, errors = Schema._validate_function(func, "abc", ["a"])
-        self.assertEqual(val.path, ["a"])
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_function(func, "abc", [])
+        self.assertEqual(str(cm.exception), "Invalid value given")
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(Invalid) as cm:
+            Schema._validate_function(func, "def", ["a"])
+        self.assertEqual(str(cm.exception), "Invalid value given @ data[a]")
+        self.assertEqual(cm.exception.data, "def")
 
 
 class TestSchemaMerge(unittest.TestCase):
@@ -496,7 +524,8 @@ class TestAnyFunction(unittest.TestCase):
         invalid_4 = Mock(side_effect=Invalid("4"))
         valid = Mock(return_value=1)
         anyfunc = Any(invalid_1, invalid_2, invalid_3, valid, invalid_4)
-        anyfunc("abcd")
+        val = anyfunc("abcd")
+        self.assertEqual(val, 1)
         invalid_1.assert_called_once_with("abcd")
         invalid_2.assert_called_once_with("abcd")
         invalid_3.assert_called_once_with("abcd")
@@ -997,14 +1026,12 @@ class TestCoerce(unittest.TestCase):
         with self.assertRaises(Invalid) as cm:
             c = Coerce(int)
             c("abc")
-        self.assertEqual(cm.exception.message, "expected int")
-        self.assertEqual(cm.exception.path, [])
+        self.assertEqual(str(cm.exception), "expected int")
 
         with self.assertRaises(Invalid) as cm:
-            c = Coerce(int)
+            c = Coerce(float)
             c(None)
-        self.assertEqual(cm.exception.message, "expected int")
-        self.assertEqual(cm.exception.path, [])
+        self.assertEqual(str(cm.exception), "expected float")
 
     def test_coerce_does_not_coerce_undefined(self):
         c = Coerce(int)
@@ -1038,7 +1065,7 @@ class TestIntegration(unittest.TestCase):
             "def": int
         }))
         with self.assertRaises(InvalidGroup) as cm:
-            s({"def": "abc"})
+            s({"abc": 1, "def": "abc"})
         self.assertEqual(
             map(str, cm.exception.errors),
             [
