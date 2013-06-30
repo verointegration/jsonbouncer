@@ -45,6 +45,10 @@ class Invalid(Exception):
             path = " @ data[{0}]".format("][".join(map(str, self.path)))
         return Exception.__str__(self) + path
 
+    def __repr__(self):
+        return "Invalid(\"{0}\", [{1}])".format(
+            self.message, ", ".join([str(p) for p in self.path]))
+
 
 class InvalidGroup(Invalid):
     """Thrown when a field has multiple validators fail.
@@ -57,7 +61,10 @@ class InvalidGroup(Invalid):
         self.data = data
 
     def __str__(self):
-        return str(self.errors[0])
+        return "\n".join([str(e) for e in self.errors])
+
+    def __repr__(self):
+        return "InvalidGroup([{0}])".format(", ".join(map(repr, self.errors)))
 
 
 class SchemaError(Exception):
@@ -75,14 +82,12 @@ class Schema(object):
     validate and optionally convert the value.
     """
 
-    def __init__(self, *schemas):
+    def __init__(self, schema):
         """Create a new schema.
 
         :param schema: Validation schema. See :module:`validation` for details.
         """
-        self.schema = schemas[0]
-        for schema in schemas[1:]:
-            self.schema = self._merge_schemas(self.schema, schema)
+        self.schema = schema
 
     def __call__(self, data):
         """Validate data against this schema."""
@@ -187,8 +192,10 @@ class Schema(object):
                     output[key] = retval
             except InvalidGroup as e:
                 errors += e.errors
+                output[key] = e
             except Invalid as e:
                 errors.append(e)
+                output[key] = e
         if errors:
             raise InvalidGroup(errors, output)
         return output
@@ -289,6 +296,48 @@ def All(*schemas, **kwargs):
         if schemas:
             for schema in schemas:
                 data = Schema._validate(schema, data, [])
+        when_var = None
+        if data == 0 and type(data) != bool and "when_zero" in kwargs:
+            when_var = kwargs["when_zero"]
+        elif data is False and "when_false" in kwargs:
+            when_var = kwargs["when_false"]
+        elif data is None and "when_none" in kwargs:
+            when_var = kwargs["when_none"]
+        elif data == "" and "when_empty_str" in kwargs:
+            when_var = kwargs["when_empty_str"]
+        elif data is Undefined and "when_undefined" in kwargs:
+            when_var = kwargs["when_undefined"]
+        elif not bool(data) and "when_empty" in kwargs:
+            print "when_empty", data, str(kwargs["when_empty"])
+            when_var = kwargs["when_empty"]
+        if when_var:
+            if when_var == Invalid:
+                raise Invalid("A value is required")
+            if isinstance(when_var, Invalid):
+                raise when_var
+            if callable(when_var):
+                return when_var(data)
+            return when_var
+        return data
+    return inner
+
+
+def Chain(*schemas, **kwargs):
+    def inner(data):
+        if schemas:
+            error = None
+            for schema in schemas:
+                try:
+                    data = Schema._validate(schema, data, [])
+                    error = None
+                except Invalid as e:
+                    data = e
+                    error = e
+                except InvalidGroup as e:
+                    data = e
+                    error = e
+            if error:
+                raise error
         when_var = None
         if data == 0 and type(data) != bool and "when_zero" in kwargs:
             when_var = kwargs["when_zero"]

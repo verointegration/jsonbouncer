@@ -6,8 +6,8 @@ import unittest
 from mock import Mock, call, patch
 
 from jsonbouncer import (
-    Schema, Invalid, InvalidGroup, Undefined, SchemaError, Any, All)
-from validators import Coerce
+    Schema, Invalid, InvalidGroup, Undefined, SchemaError, Any, All, Chain)
+from validators import Coerce, Range, InList, RequireOne, RequireIf
 
 
 class TestUndefined(unittest.TestCase):
@@ -46,12 +46,15 @@ class TestInvalid(unittest.TestCase):
         instance = Invalid("Invalid message", path=[1, "b", 3])
         self.assertEqual(str(instance), "Invalid message @ data[1][b][3]")
 
+    def test_invalid_exception_repr_returns_invalid_object(self):
+        instance = Invalid("Invalid message")
+        self.assertEqual(repr(instance), "Invalid(\"Invalid message\", [])")
+        instance = Invalid("Invalid message", path=[1, "b", 3])
+        self.assertEqual(
+            repr(instance), "Invalid(\"Invalid message\", [1, b, 3])")
+
 
 class TestInvalidGroup(unittest.TestCase):
-    def test_invalid_group_returns_the_first_error_message_as_its_str(self):
-        instance = InvalidGroup([Invalid("a"), Invalid("b")])
-        self.assertEqual(str(instance), "a")
-
     def test_creating_an_invalid_group_saves_the_passed_in_errors(self):
         instance = InvalidGroup([1, 2])
         self.assertEqual(instance.errors, [1, 2])
@@ -59,6 +62,16 @@ class TestInvalidGroup(unittest.TestCase):
     def test_creating_an_invalid_group_saves_the_passed_in_data(self):
         instance = InvalidGroup([], "abc")
         self.assertEqual(instance.data, "abc")
+
+    def test_invalid_group_returns_all_error_messages_as_its_str(self):
+        instance = InvalidGroup([Invalid("a", path=[1]), Invalid("b")])
+        self.assertEqual(str(instance), "a @ data[1]\nb")
+
+    def test_invalid_group_repr_returns_invalid_group_object(self):
+        instance = InvalidGroup([Invalid("a", path=[1]), Invalid("b")])
+        self.assertEqual(
+            repr(instance),
+            "InvalidGroup([Invalid(\"a\", [1]), Invalid(\"b\", [])])")
 
 
 class TestSchema(unittest.TestCase):
@@ -1040,6 +1053,68 @@ class TestCoerce(unittest.TestCase):
         self.assertEqual(c(Undefined), Undefined)
         c = Coerce(unicode)
         self.assertEqual(c(Undefined), Undefined)
+
+
+class TestRequireOne(unittest.TestCase):
+    def test_require_one_returns_an_invalid_group_with_invalids_removed(self):
+        data = {
+            "a": Invalid("a"), "b": 1, "c": Invalid("c"),
+            "d": Invalid("d"), "e": 2, "f": 3
+        }
+        req = RequireOne("a", "b", "d", "f")
+        with self.assertRaises(Invalid) as cm:
+            req(InvalidGroup([data["a"], data["c"], data["d"]], data))
+        self.assertEqual(str(cm.exception), "c")
+        self.assertEqual(cm.exception.data, {"b": 1, "c": data["c"], "e": 2})
+
+    def test_require_one_returns_data_with_invalids_removed(self):
+        data = {
+            "a": Invalid("a"), "b": 1, "c": "abc",
+            "d": Invalid("d"), "e": 2, "f": 3
+        }
+        req = RequireOne("a", "b", "d", "f")
+        val = req(InvalidGroup([data["a"], data["d"]], data))
+        self.assertEqual(val, {"b": 1, "c": "abc", "e": 2})
+
+    def test_require_one_returns_data_with_data_removed(self):
+        data = {"a": 0, "b": 1, "c": "abc", "d": "def", "e": 2, "f": 3}
+        req = RequireOne("a", "b", "d", "f")
+        val = req(data)
+        self.assertEqual(val, {"a": 0, "c": "abc", "e": 2})
+
+
+class TestRequireIf(unittest.TestCase):
+    def test_require_if_returns_an_invalid_group_with_invalids_removed(self):
+        data = {"a": Invalid("a"), "b": 1, "c": Invalid("c"), "d": 2}
+        req = RequireIf("a", Mock(return_value=False))
+        with self.assertRaises(Invalid) as cm:
+            req(InvalidGroup([data["a"], data["c"]], data))
+        self.assertEqual(str(cm.exception), "c")
+        self.assertEqual(cm.exception.data, {"b": 1, "c": data["c"], "d": 2})
+        data = {"a": Invalid("a"), "b": 1, "c": Invalid("c"), "d": 2}
+        req = RequireIf("a", Mock(return_value=True))
+        with self.assertRaises(Invalid) as cm:
+            req(InvalidGroup([data["a"], data["c"]], data))
+        self.assertEqual(str(cm.exception), "a\nc")
+        self.assertEqual(
+            cm.exception.data,
+            {"a": data["a"], "b": 1, "c": data["c"], "d": 2})
+
+    def test_require_one_returns_data_with_invalids_removed(self):
+        data = {"a": Invalid("a"), "b": 1, "c": "abc", "d": 2}
+        req = RequireIf("a", Mock(return_value=False))
+        val = req(InvalidGroup([data["a"]], data))
+        self.assertEqual(val, {"b": 1, "c": "abc", "d": 2})
+
+    def test_require_one_returns_data_with_data_removed(self):
+        data = {"a": 0, "b": 1, "c": "abc"}
+        req = RequireIf("a", Mock(return_value=False))
+        val = req(data)
+        self.assertEqual(val, {"b": 1, "c": "abc"})
+        data = {"a": 0, "b": 1, "c": "abc"}
+        req = RequireIf("a", Mock(return_value=True))
+        val = req(data)
+        self.assertEqual(val, {"a": 0, "b": 1, "c": "abc"})
 
 
 class TestIntegration(unittest.TestCase):
