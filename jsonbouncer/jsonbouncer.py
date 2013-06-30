@@ -24,6 +24,8 @@ Undefined = _Undefined()
 
 class SkipValidation(Exception):
     """Thrown to stop proceeding validators from being run on a field."""
+    def __init__(self, data):
+        self.data = data
 
 
 class Invalid(Exception):
@@ -242,7 +244,7 @@ class Schema(object):
         return output
 
 
-def Any(*schemas, **kwargs):
+def Any(*schemas):
     """Returns the value of the first schema entry that validates.
 
     A schema entry is determined to be valid if it does not raise an Invalid
@@ -261,32 +263,11 @@ def Any(*schemas, **kwargs):
                     error = e
             else:
                 raise error
-        when_var = None
-        if data == 0 and type(data) != bool and "when_zero" in kwargs:
-            when_var = kwargs["when_zero"]
-        elif data is False and "when_false" in kwargs:
-            when_var = kwargs["when_false"]
-        elif data is None and "when_none" in kwargs:
-            when_var = kwargs["when_none"]
-        elif data == "" and "when_empty_str" in kwargs:
-            when_var = kwargs["when_empty_str"]
-        elif data is Undefined and "when_undefined" in kwargs:
-            when_var = kwargs["when_undefined"]
-        elif not bool(data) and "when_empty" in kwargs:
-            when_var = kwargs["when_empty"]
-        if when_var:
-            if when_var == Invalid:
-                raise Invalid("A value is required")
-            if isinstance(when_var, Invalid):
-                raise when_var
-            if callable(when_var):
-                return when_var(data)
-            return when_var
         return data
     return inner
 
 
-def All(*schemas, **kwargs):
+def All(*schemas):
     """Returns a value if it validates all schema entries passed.
 
     A value is determined to be valid and returned if all schema entries passed
@@ -296,33 +277,11 @@ def All(*schemas, **kwargs):
         if schemas:
             for schema in schemas:
                 data = Schema._validate(schema, data, [])
-        when_var = None
-        if data == 0 and type(data) != bool and "when_zero" in kwargs:
-            when_var = kwargs["when_zero"]
-        elif data is False and "when_false" in kwargs:
-            when_var = kwargs["when_false"]
-        elif data is None and "when_none" in kwargs:
-            when_var = kwargs["when_none"]
-        elif data == "" and "when_empty_str" in kwargs:
-            when_var = kwargs["when_empty_str"]
-        elif data is Undefined and "when_undefined" in kwargs:
-            when_var = kwargs["when_undefined"]
-        elif not bool(data) and "when_empty" in kwargs:
-            print "when_empty", data, str(kwargs["when_empty"])
-            when_var = kwargs["when_empty"]
-        if when_var:
-            if when_var == Invalid:
-                raise Invalid("A value is required")
-            if isinstance(when_var, Invalid):
-                raise when_var
-            if callable(when_var):
-                return when_var(data)
-            return when_var
         return data
     return inner
 
 
-def Chain(*schemas, **kwargs):
+def Chain(*schemas):
     def inner(data):
         if schemas:
             error = None
@@ -338,26 +297,5 @@ def Chain(*schemas, **kwargs):
                     error = e
             if error:
                 raise error
-        when_var = None
-        if data == 0 and type(data) != bool and "when_zero" in kwargs:
-            when_var = kwargs["when_zero"]
-        elif data is False and "when_false" in kwargs:
-            when_var = kwargs["when_false"]
-        elif data is None and "when_none" in kwargs:
-            when_var = kwargs["when_none"]
-        elif data == "" and "when_empty_str" in kwargs:
-            when_var = kwargs["when_empty_str"]
-        elif data is Undefined and "when_undefined" in kwargs:
-            when_var = kwargs["when_undefined"]
-        elif not bool(data) and "when_empty" in kwargs:
-            when_var = kwargs["when_empty"]
-        if when_var:
-            if when_var == Invalid:
-                raise Invalid("A value is required")
-            if isinstance(when_var, Invalid):
-                raise when_var
-            if callable(when_var):
-                return when_var(data)
-            return when_var
         return data
     return inner
