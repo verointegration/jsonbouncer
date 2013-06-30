@@ -22,7 +22,7 @@ class _Undefined(object):
 Undefined = _Undefined()
 
 
-class SkipValidation(Exception):
+class StopValidation(Exception):
     """Thrown to stop proceeding validators from being run on a field."""
     def __init__(self, data):
         self.data = data
@@ -257,6 +257,12 @@ def Any(*schemas):
                 try:
                     data = Schema._validate(schema, data, [])
                     break
+                except StopValidation as e:
+                    if isinstance(e.data, Invalid):
+                        error = e.data
+                    else:
+                        data = e.data
+                    break
                 except Invalid as e:
                     error = e
                 except InvalidGroup as e:
@@ -276,7 +282,13 @@ def All(*schemas):
     def inner(data):
         if schemas:
             for schema in schemas:
-                data = Schema._validate(schema, data, [])
+                try:
+                    data = Schema._validate(schema, data, [])
+                except StopValidation as e:
+                    if isinstance(e.data, Invalid):
+                        raise e.data
+                    data = e.data
+                    break
         return data
     return inner
 
@@ -289,6 +301,11 @@ def Chain(*schemas):
                 try:
                     data = Schema._validate(schema, data, [])
                     error = None
+                except StopValidation as e:
+                    data = e.data
+                    if isinstance(e.data, Invalid):
+                        error = e.data
+                    break
                 except Invalid as e:
                     data = e
                     error = e
