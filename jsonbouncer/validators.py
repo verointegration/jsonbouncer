@@ -4,10 +4,10 @@
 
 from __future__ import division, unicode_literals
 
-from jsonbouncer import Invalid, Undefined
+from jsonbouncer import Invalid, SkipValidation, Undefined
 
 
-def Coerce(func):
+def coerce_to(func):
     def inner(data):
         if data is Undefined:
             return Undefined
@@ -18,7 +18,7 @@ def Coerce(func):
     return inner
 
 
-def Range(minimum=None, maximum=None):
+def in_range(minimum=None, maximum=None):
     def inner(data):
         if minimum is not None and data < minimum:
             raise Invalid("must be at least {0}".format(minimum))
@@ -28,19 +28,19 @@ def Range(minimum=None, maximum=None):
     return inner
 
 
-def Minimum(value, inclusive=True):
+def minimum(value, inclusive=True):
     if not inclusive:
         value += 1
-    return Range(value)
+    return in_range(value)
 
 
-def Maximum(value, inclusive=True):
+def maximum(value, inclusive=True):
     if not inclusive:
         value -= 1
-    return Range(None, value)
+    return in_range(None, value)
 
 
-def InList(allowed):
+def in_list(allowed):
     def inner(data):
         if data not in allowed:
             raise Invalid("not in list of valid values")
@@ -48,7 +48,7 @@ def InList(allowed):
     return inner
 
 
-def RequireOne(*fields):
+def require_one(*fields):
     def inner(data):
         working_data = data
         is_invalid = False
@@ -76,7 +76,7 @@ def RequireOne(*fields):
     return inner
 
 
-def RequireIf(field, func):
+def require_if(field, func):
     def inner(data):
         working_data = data
         is_invalid = False
@@ -95,3 +95,61 @@ def RequireIf(field, func):
             raise data
         return working_data
     return inner
+
+
+def when_empty(func):
+    def inner(data):
+        if not bool(data):
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def when_zero(func):
+    def inner(data):
+        if data == 0 and type(data) != bool:
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def when_false(func):
+    def inner(data):
+        if data is False:
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def when_none(func):
+    def inner(data):
+        if data is None:
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def when_empty_str(func):
+    def inner(data):
+        if data == "":
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def when_undefined(func):
+    def inner(data):
+        if data is Undefined:
+            raise SkipValidation(_when_base(data, func))
+        return data
+    return inner
+
+
+def _when_base(data, func):
+    if func == Invalid:
+        raise Invalid("A value is required")
+    if isinstance(func, Invalid):
+        raise func
+    if callable(func):
+        return func(data)
+    return func
