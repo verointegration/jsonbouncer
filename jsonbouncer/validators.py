@@ -4,7 +4,7 @@
 
 from __future__ import division, unicode_literals
 
-from jsonbouncer import Invalid, SkipValidation, Undefined
+from jsonbouncer import Invalid, StopValidation, Undefined
 
 
 def coerce_to(func):
@@ -100,7 +100,7 @@ def require_if(field, func):
 def when_empty(func):
     def inner(data):
         if not bool(data):
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
@@ -108,7 +108,7 @@ def when_empty(func):
 def when_zero(func):
     def inner(data):
         if data == 0 and type(data) != bool:
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
@@ -116,7 +116,7 @@ def when_zero(func):
 def when_false(func):
     def inner(data):
         if data is False:
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
@@ -124,7 +124,7 @@ def when_false(func):
 def when_none(func):
     def inner(data):
         if data is None:
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
@@ -132,7 +132,7 @@ def when_none(func):
 def when_empty_str(func):
     def inner(data):
         if data == "":
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
@@ -140,16 +140,16 @@ def when_empty_str(func):
 def when_undefined(func):
     def inner(data):
         if data is Undefined:
-            raise SkipValidation(_when_base(data, func))
+            raise StopValidation(_when_base(data, func))
         return data
     return inner
 
 
 def _when_base(data, func):
     if func == Invalid:
-        raise Invalid("A value is required")
+        return Invalid("A value is required")
     if isinstance(func, Invalid):
-        raise func
+        return func
     if callable(func):
         return func(data)
     return func
