@@ -6,9 +6,12 @@ import unittest
 from mock import Mock, call, patch
 
 from jsonbouncer import (
-    Schema, Invalid, InvalidGroup, Undefined, SchemaError, Any, All, Chain)
+    Schema, Invalid, InvalidGroup, StopValidation, Undefined, SchemaError,
+    Any, All, Chain)
 from validators import (
-    coerce_to, in_range, in_list, require_one, require_if, when_empty)
+    coerce_to, in_range, in_list, require_one, require_if,
+    _when_base, when_empty, when_zero, when_false, when_none,
+    when_empty_str, when_undefined)
 
 
 class TestUndefined(unittest.TestCase):
@@ -512,11 +515,6 @@ class TestSchemaValidateFunction(unittest.TestCase):
         self.assertEqual(cm.exception.data, "def")
 
 
-class TestSchemaMerge(unittest.TestCase):
-    def test_merge_calls_the_correct_merge_function_based_on_the_type(self):
-        pass
-
-
 class TestAnyFunction(unittest.TestCase):
     def test_any_returns_a_new_function(self):
         anyfunc = Any(int)
@@ -750,6 +748,129 @@ class TestRequireIf(unittest.TestCase):
         self.assertEqual(val, {"a": 0, "b": 1, "c": "abc"})
 
 
+class TestWhenValidators(unittest.TestCase):
+    def test_when_base_returns_invalid_when_passed_the_invalid_class(self):
+        val = _when_base(None, Invalid)
+        self.assertTrue(isinstance(val, Invalid))
+        self.assertEqual(str(val), "A value is required")
+
+    def test_when_base_returns_invalid_when_passed_an_invalid_instance(self):
+        val = _when_base(None, Invalid("abc"))
+        self.assertTrue(isinstance(val, Invalid))
+        self.assertEqual(str(val), "abc")
+        val = _when_base(None, InvalidGroup([Invalid("a"), Invalid("b")]))
+        self.assertTrue(isinstance(val, InvalidGroup))
+        self.assertEqual(str(val), "a\nb")
+
+    def test_when_base_returns_function_value_when_passed_a_function(self):
+        mocked = Mock(return_value=8)
+        self.assertEqual(_when_base(None, mocked), 8)
+        mocked.assert_called_once_with(None)
+        mocked.reset_mock()
+        self.assertEqual(_when_base("abc", mocked), 8)
+        mocked.assert_called_once_with("abc")
+
+    def test_when_base_returns_value_when_passed_a_standard_value(self):
+        self.assertEqual(_when_base("abc", "def"), "def")
+        self.assertEqual(_when_base(0, None), None)
+
+    def test_when_empty_raises_stop_validation_on_falsy_values(self):
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")(0)
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")(0.0)
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")(False)
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")(None)
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")("")
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_empty("abc")(Undefined)
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_empty("def")(1), 1)
+        self.assertEqual(when_empty("def")(0.01), 0.01)
+        self.assertEqual(when_empty("def")(True), True)
+        self.assertEqual(when_empty("def")("abc"), "abc")
+
+    def test_when_zero_raises_stop_validation_on_zero(self):
+        with self.assertRaises(StopValidation) as cm:
+            when_zero("abc")(0)
+        self.assertEqual(cm.exception.data, "abc")
+        with self.assertRaises(StopValidation) as cm:
+            when_zero("abc")(0.0)
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_zero("abc")(False), False)
+        self.assertEqual(when_zero("abc")(None), None)
+        self.assertEqual(when_zero("abc")(""), "")
+        self.assertEqual(when_zero("abc")(Undefined), Undefined)
+        self.assertEqual(when_zero("def")(1), 1)
+        self.assertEqual(when_zero("def")(0.01), 0.01)
+        self.assertEqual(when_zero("def")(True), True)
+        self.assertEqual(when_zero("def")("abc"), "abc")
+
+    def test_when_false_raises_stop_validation_on_false(self):
+        self.assertEqual(when_false("abc")(0), 0)
+        self.assertEqual(when_false("abc")(0.0), 0.0)
+        with self.assertRaises(StopValidation) as cm:
+            when_false("abc")(False)
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_false("abc")(None), None)
+        self.assertEqual(when_false("abc")(""), "")
+        self.assertEqual(when_false("abc")(Undefined), Undefined)
+        self.assertEqual(when_false("def")(1), 1)
+        self.assertEqual(when_false("def")(0.01), 0.01)
+        self.assertEqual(when_false("def")(True), True)
+        self.assertEqual(when_false("def")("abc"), "abc")
+
+    def test_when_none_raises_stop_validation_on_none(self):
+        self.assertEqual(when_none("abc")(0), 0)
+        self.assertEqual(when_none("abc")(0.0), 0.0)
+        self.assertEqual(when_none("abc")(False), False)
+        with self.assertRaises(StopValidation) as cm:
+            when_none("abc")(None)
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_none("abc")(""), "")
+        self.assertEqual(when_none("abc")(Undefined), Undefined)
+        self.assertEqual(when_none("def")(1), 1)
+        self.assertEqual(when_none("def")(0.01), 0.01)
+        self.assertEqual(when_none("def")(True), True)
+        self.assertEqual(when_none("def")("abc"), "abc")
+
+    def test_when_empty_str_raises_stop_validation_on_empty_string(self):
+        self.assertEqual(when_empty_str("abc")(0), 0)
+        self.assertEqual(when_empty_str("abc")(0.0), 0.0)
+        self.assertEqual(when_empty_str("abc")(False), False)
+        self.assertEqual(when_empty_str("abc")(None), None)
+        with self.assertRaises(StopValidation) as cm:
+            when_empty_str("abc")("")
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_empty_str("abc")(Undefined), Undefined)
+        self.assertEqual(when_empty_str("def")(1), 1)
+        self.assertEqual(when_empty_str("def")(0.01), 0.01)
+        self.assertEqual(when_empty_str("def")(True), True)
+        self.assertEqual(when_empty_str("def")("abc"), "abc")
+
+    def test_when_undefined_raises_stop_validation_on_undefined(self):
+        self.assertEqual(when_undefined("abc")(0), 0)
+        self.assertEqual(when_undefined("abc")(0.0), 0.0)
+        self.assertEqual(when_undefined("abc")(False), False)
+        self.assertEqual(when_undefined("abc")(None), None)
+        self.assertEqual(when_undefined("abc")(""), "")
+        with self.assertRaises(StopValidation) as cm:
+            when_undefined("abc")(Undefined)
+        self.assertEqual(cm.exception.data, "abc")
+        self.assertEqual(when_undefined("def")(1), 1)
+        self.assertEqual(when_undefined("def")(0.01), 0.01)
+        self.assertEqual(when_undefined("def")(True), True)
+        self.assertEqual(when_undefined("def")("abc"), "abc")
+
+
 class TestIntegration(unittest.TestCase):
     def test_basic_integration_test(self):
         s = Schema({
@@ -859,373 +980,3 @@ class TestIntegration(unittest.TestCase):
         #         "description": "abc",
         #         "is_tech_purchase"
         #         })
-
-
-
-# def test_all_applies_the_when_empty_argument_on_an_empty_value(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_empty="abcdef")
-
-#     self.assertEqual(allfunc(0), "abcdef")
-#     self.assertEqual(allfunc(0.0), "abcdef")
-#     self.assertEqual(allfunc(False), "abcdef")
-#     self.assertEqual(allfunc(None), "abcdef")
-#     self.assertEqual(allfunc(""), "abcdef")
-#     self.assertEqual(allfunc(Undefined), "abcdef")
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     allfunc = All(return_func, when_empty=mocked)
-
-#     self.assertEqual(allfunc(0), "abcdef")
-#     mocked.assert_called_once_with(0)
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(0.0), "abcdef")
-#     mocked.assert_called_once_with(0.0)
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(False), "abcdef")
-#     mocked.assert_called_once_with(False)
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(None), "abcdef")
-#     mocked.assert_called_once_with(None)
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(""), "abcdef")
-#     mocked.assert_called_once_with("")
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(Undefined), "abcdef")
-#     mocked.assert_called_once_with(Undefined)
-#     mocked.reset_mock()
-
-# def test_all_applies_the_when_zero_argument_on_a_zero_value(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_zero="abcdef")
-
-#     self.assertEqual(allfunc(0), "abcdef")
-#     self.assertEqual(allfunc(0.0), "abcdef")
-#     self.assertEqual(allfunc(False), False)
-#     self.assertEqual(allfunc(None), None)
-#     self.assertEqual(allfunc(""), "")
-#     self.assertEqual(allfunc(Undefined), Undefined)
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     allfunc = All(return_func, when_zero=mocked)
-
-#     self.assertEqual(allfunc(0), "abcdef")
-#     mocked.assert_called_once_with(0)
-#     mocked.reset_mock()
-#     self.assertEqual(allfunc(0.0), "abcdef")
-#     mocked.assert_called_once_with(0.0)
-
-# def test_all_applies_the_when_none_argument_on_a_none_value(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_none="abcdef")
-
-#     self.assertEqual(allfunc(0), 0)
-#     self.assertEqual(allfunc(0.0), 0.0)
-#     self.assertEqual(allfunc(False), False)
-#     self.assertEqual(allfunc(None), "abcdef")
-#     self.assertEqual(allfunc(""), "")
-#     self.assertEqual(allfunc(Undefined), Undefined)
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     allfunc = All(return_func, when_none=mocked)
-
-#     self.assertEqual(allfunc(None), "abcdef")
-#     mocked.assert_called_once_with(None)
-
-# def test_all_applies_the_when_false_argument_on_a_false_value(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_false="abcdef")
-
-#     self.assertEqual(allfunc(0), 0)
-#     self.assertEqual(allfunc(0.0), 0.0)
-#     self.assertEqual(allfunc(False), "abcdef")
-#     self.assertEqual(allfunc(None), None)
-#     self.assertEqual(allfunc(""), "")
-#     self.assertEqual(allfunc(Undefined), Undefined)
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     allfunc = All(return_func, when_false=mocked)
-
-#     self.assertEqual(allfunc(False), "abcdef")
-#     mocked.assert_called_once_with(False)
-
-# def test_all_applies_the_when_empty_str_argument_on_an_empty_string(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_empty_str=8)
-
-#     self.assertEqual(allfunc(0), 0)
-#     self.assertEqual(allfunc(0.0), 0.0)
-#     self.assertEqual(allfunc(False), False)
-#     self.assertEqual(allfunc(None), None)
-#     self.assertEqual(allfunc(""), 8)
-#     self.assertEqual(allfunc(Undefined), Undefined)
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value=8)
-#     allfunc = All(return_func, when_empty_str=mocked)
-
-#     self.assertEqual(allfunc(""), 8)
-#     mocked.assert_called_once_with("")
-
-# def test_all_applies_the_when_undefined_arugment_on_an_undefined(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_undefined="abcdef")
-
-#     self.assertEqual(allfunc(0), 0)
-#     self.assertEqual(allfunc(0.0), 0.0)
-#     self.assertEqual(allfunc(False), False)
-#     self.assertEqual(allfunc(None), None)
-#     self.assertEqual(allfunc(""), "")
-#     self.assertEqual(allfunc(Undefined), "abcdef")
-
-#     self.assertEqual(allfunc(1), 1)
-#     self.assertEqual(allfunc(0.01), 0.01)
-#     self.assertEqual(allfunc(True), True)
-#     self.assertEqual(allfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     allfunc = All(return_func, when_undefined=mocked)
-
-#     self.assertEqual(allfunc(Undefined), "abcdef")
-#     mocked.assert_called_once_with(Undefined)
-
-# def test_all_doesnt_apply_when_empty_if_a_more_specific_one_exists(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_empty=1, when_zero=2)
-#     self.assertEqual(allfunc(0), 2)
-#     allfunc = All(return_func, when_empty=1, when_false=2)
-#     self.assertEqual(allfunc(False), 2)
-#     allfunc = All(return_func, when_empty=1, when_none=2)
-#     self.assertEqual(allfunc(None), 2)
-#     allfunc = All(return_func, when_empty=1, when_empty_str=2)
-#     self.assertEqual(allfunc(""), 2)
-#     allfunc = All(return_func, when_empty=1, when_undefined=2)
-#     self.assertEqual(allfunc(Undefined), 2)
-
-# def test_all_raises_an_invalid_instance_if_a_when_is_set_to_invalid(self):
-#     def return_func(data):
-#         return data
-#     allfunc = All(return_func, when_empty(Invalid)("abcdef"))
-#     with self.assertRaises(Invalid) as cm:
-#         allfunc(0)
-#     self.assertEqual(cm.exception.message, "abcdef")
-#     allfunc = All(return_func, when_empty(Invalid))
-#     with self.assertRaises(Invalid) as cm:
-#         allfunc(0)
-#     self.assertEqual(cm.exception.message, "A value is required")
-
-
-
-# def test_any_applies_the_when_empty_argument_on_an_empty_value(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_empty="abcdef")
-
-#     self.assertEqual(anyfunc(0), "abcdef")
-#     self.assertEqual(anyfunc(0.0), "abcdef")
-#     self.assertEqual(anyfunc(False), "abcdef")
-#     self.assertEqual(anyfunc(None), "abcdef")
-#     self.assertEqual(anyfunc(""), "abcdef")
-#     self.assertEqual(anyfunc(Undefined), "abcdef")
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     anyfunc = Any(return_func, when_empty=mocked)
-
-#     self.assertEqual(anyfunc(0), "abcdef")
-#     mocked.assert_called_once_with(0)
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(0.0), "abcdef")
-#     mocked.assert_called_once_with(0.0)
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(False), "abcdef")
-#     mocked.assert_called_once_with(False)
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(None), "abcdef")
-#     mocked.assert_called_once_with(None)
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(""), "abcdef")
-#     mocked.assert_called_once_with("")
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(Undefined), "abcdef")
-#     mocked.assert_called_once_with(Undefined)
-#     mocked.reset_mock()
-
-# def test_any_applies_the_when_zero_argument_on_a_zero_value(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_zero="abcdef")
-
-#     self.assertEqual(anyfunc(0), "abcdef")
-#     self.assertEqual(anyfunc(0.0), "abcdef")
-#     self.assertEqual(anyfunc(False), False)
-#     self.assertEqual(anyfunc(None), None)
-#     self.assertEqual(anyfunc(""), "")
-#     self.assertEqual(anyfunc(Undefined), Undefined)
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     anyfunc = Any(return_func, when_zero=mocked)
-
-#     self.assertEqual(anyfunc(0), "abcdef")
-#     mocked.assert_called_once_with(0)
-#     mocked.reset_mock()
-#     self.assertEqual(anyfunc(0.0), "abcdef")
-#     mocked.assert_called_once_with(0.0)
-
-# def test_any_applies_the_when_none_argument_on_a_none_value(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_none="abcdef")
-
-#     self.assertEqual(anyfunc(0), 0)
-#     self.assertEqual(anyfunc(0.0), 0.0)
-#     self.assertEqual(anyfunc(False), False)
-#     self.assertEqual(anyfunc(None), "abcdef")
-#     self.assertEqual(anyfunc(""), "")
-#     self.assertEqual(anyfunc(Undefined), Undefined)
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     anyfunc = Any(return_func, when_none=mocked)
-
-#     self.assertEqual(anyfunc(None), "abcdef")
-#     mocked.assert_called_once_with(None)
-
-# def test_any_applies_the_when_false_argument_on_a_false_value(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_false="abcdef")
-
-#     self.assertEqual(anyfunc(0), 0)
-#     self.assertEqual(anyfunc(0.0), 0.0)
-#     self.assertEqual(anyfunc(False), "abcdef")
-#     self.assertEqual(anyfunc(None), None)
-#     self.assertEqual(anyfunc(""), "")
-#     self.assertEqual(anyfunc(Undefined), Undefined)
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     anyfunc = Any(return_func, when_false=mocked)
-
-#     self.assertEqual(anyfunc(False), "abcdef")
-#     mocked.assert_called_once_with(False)
-
-# def test_any_applies_the_when_empty_str_argument_on_an_empty_string(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_empty_str=8)
-
-#     self.assertEqual(anyfunc(0), 0)
-#     self.assertEqual(anyfunc(0.0), 0.0)
-#     self.assertEqual(anyfunc(False), False)
-#     self.assertEqual(anyfunc(None), None)
-#     self.assertEqual(anyfunc(""), 8)
-#     self.assertEqual(anyfunc(Undefined), Undefined)
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value=8)
-#     anyfunc = Any(return_func, when_empty_str=mocked)
-
-#     self.assertEqual(anyfunc(""), 8)
-#     mocked.assert_called_once_with("")
-
-# def test_any_applies_the_when_undefined_arugment_on_an_undefined(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_undefined="abcdef")
-
-#     self.assertEqual(anyfunc(0), 0)
-#     self.assertEqual(anyfunc(0.0), 0.0)
-#     self.assertEqual(anyfunc(False), False)
-#     self.assertEqual(anyfunc(None), None)
-#     self.assertEqual(anyfunc(""), "")
-#     self.assertEqual(anyfunc(Undefined), "abcdef")
-
-#     self.assertEqual(anyfunc(1), 1)
-#     self.assertEqual(anyfunc(0.01), 0.01)
-#     self.assertEqual(anyfunc(True), True)
-#     self.assertEqual(anyfunc("abc"), "abc")
-
-#     mocked = Mock(return_value="abcdef")
-#     anyfunc = Any(return_func, when_undefined=mocked)
-
-#     self.assertEqual(anyfunc(Undefined), "abcdef")
-#     mocked.assert_called_once_with(Undefined)
-
-# def test_any_doesnt_apply_when_empty_if_a_more_specific_one_exists(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_empty=1, when_zero=2)
-#     self.assertEqual(anyfunc(0), 2)
-#     anyfunc = Any(return_func, when_empty=1, when_false=2)
-#     self.assertEqual(anyfunc(False), 2)
-#     anyfunc = Any(return_func, when_empty=1, when_none=2)
-#     self.assertEqual(anyfunc(None), 2)
-#     anyfunc = Any(return_func, when_empty=1, when_empty_str=2)
-#     self.assertEqual(anyfunc(""), 2)
-#     anyfunc = Any(return_func, when_empty=1, when_undefined=2)
-#     self.assertEqual(anyfunc(Undefined), 2)
-
-# def test_any_raises_an_invalid_instance_if_a_when_is_set_to_invalid(self):
-#     def return_func(data):
-#         return data
-#     anyfunc = Any(return_func, when_empty(Invalid)("abcdef"))
-#     with self.assertRaises(Invalid) as cm:
-#         anyfunc(0)
-#     self.assertEqual(cm.exception.message, "abcdef")
-#     anyfunc = Any(return_func, when_empty(Invalid))
-#     with self.assertRaises(Invalid) as cm:
-#         anyfunc(0)
-#     self.assertEqual(cm.exception.message, "A value is required")
