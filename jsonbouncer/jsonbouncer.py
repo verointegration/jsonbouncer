@@ -3,7 +3,7 @@
 """
 
 from __future__ import division, unicode_literals
-
+from functools import wraps
 
 __author__ = "Kevin Peel <kevin.peel@verointegration.com"
 __version__ = "0.0.1"
@@ -28,7 +28,11 @@ class StopValidation(Exception):
         self.data = data
 
 
-class Invalid(Exception):
+class InvalidBase(Exception):
+    pass
+
+
+class Invalid(InvalidBase):
     """Thrown when a field contains invalid data.
 
     :attr message: The error message.
@@ -52,14 +56,15 @@ class Invalid(Exception):
             self.message, ", ".join([str(p) for p in self.path]))
 
 
-class InvalidGroup(Invalid):
+class InvalidGroup(InvalidBase):
     """Thrown when a field has multiple validators fail.
 
     :attr errors: Two or more objects of the Invalid type.
     """
 
-    def __init__(self, errors=None, data=None):
-        self.errors = errors[:] if errors else []
+    def __init__(self, message="", errors=None, data=None):
+        Exception.__init__(self, message)
+        self.errors = errors if errors else []
         self.data = data
 
     def __str__(self):
@@ -98,7 +103,7 @@ class Schema(object):
         except InvalidGroup as e:
             raise e
         except Invalid as e:
-            raise InvalidGroup([e])
+            raise InvalidGroup("", [e])
         return data
 
     @classmethod
@@ -137,6 +142,8 @@ class Schema(object):
         :param data: The data to validate.
         :param path: The path of the passed in data.
         """
+        if isinstance(data, InvalidBase):
+            raise data
         if data is Undefined:
             return data
         if not isinstance(data, schema):
@@ -158,13 +165,12 @@ class Schema(object):
         except ValueError:
             raise Invalid("Invalid value given", data, path)
         except InvalidGroup as e:
-            errors = []
             for invalid in e.errors:
-                errors.append(
-                    Invalid(invalid.message, data, path + invalid.path))
-            raise InvalidGroup(errors, data)
+                invalid.path = path + invalid.path
+            raise e
         except Invalid as e:
-            raise Invalid(e.message, data, path + e.path)
+            e.path = path + e.path
+            raise e
 
     @classmethod
     def _validate_dict(cls, schema, data, path):
@@ -177,6 +183,8 @@ class Schema(object):
         validated data (possibly munged by the validation functions) will
         be returned.
         """
+        if isinstance(data, InvalidBase):
+            raise data
         if not isinstance(data, dict):
             raise Invalid("Expected an object", data, path)
         # If the schema is empty, all data is allowed
@@ -199,7 +207,7 @@ class Schema(object):
                 errors.append(e)
                 output[key] = e
         if errors:
-            raise InvalidGroup(errors, output)
+            raise InvalidGroup("", errors, output)
         return output
 
     @classmethod
@@ -213,6 +221,8 @@ class Schema(object):
         exception is raised if one or more items failed validation, otherwise
         the list of validated items is returned.
         """
+        if isinstance(data, InvalidBase):
+            raise data
         if not isinstance(data, list):
             raise Invalid("Expected a list", data, path)
         # If the schema is empty, all data is allowed
@@ -240,7 +250,7 @@ class Schema(object):
                     errors.append(error)
                 output.append(error)
         if errors:
-            raise InvalidGroup(errors, output)
+            raise InvalidGroup("", errors, output)
         return output
 
 
@@ -250,6 +260,7 @@ def Any(*schemas):
     A schema entry is determined to be valid if it does not raise an Invalid
     exception. This means Any() will be satisfied by any return value
     (including Undefined, None, 0, etc.)."""
+    @wraps(Any)
     def inner(data):
         if schemas:
             error = None
@@ -258,7 +269,7 @@ def Any(*schemas):
                     data = Schema._validate(schema, data, [])
                     break
                 except StopValidation as e:
-                    if isinstance(e.data, Invalid):
+                    if isinstance(e.data, InvalidBase):
                         error = e.data
                     else:
                         data = e.data
@@ -279,13 +290,14 @@ def All(*schemas):
     A value is determined to be valid and returned if all schema entries passed
     in validate. A schema entry is determined to be valid if it does not raise
     an Invalid exception."""
+    @wraps(All)
     def inner(data):
         if schemas:
             for schema in schemas:
                 try:
                     data = Schema._validate(schema, data, [])
                 except StopValidation as e:
-                    if isinstance(e.data, Invalid):
+                    if isinstance(e.data, InvalidBase):
                         raise e.data
                     data = e.data
                     break
@@ -294,6 +306,7 @@ def All(*schemas):
 
 
 def Chain(*schemas):
+    @wraps(Chain)
     def inner(data):
         if schemas:
             error = None
@@ -303,13 +316,10 @@ def Chain(*schemas):
                     error = None
                 except StopValidation as e:
                     data = e.data
-                    if isinstance(e.data, Invalid):
+                    if isinstance(e.data, InvalidBase):
                         error = e.data
                     break
-                except Invalid as e:
-                    data = e
-                    error = e
-                except InvalidGroup as e:
+                except (Invalid, InvalidGroup) as e:
                     data = e
                     error = e
             if error:
