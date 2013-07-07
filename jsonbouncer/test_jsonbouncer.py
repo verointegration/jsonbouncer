@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # pylint: disable-all
 from __future__ import division, unicode_literals
@@ -6,8 +7,8 @@ import unittest
 from mock import Mock, call, patch
 
 from jsonbouncer import (
-    Schema, Invalid, InvalidGroup, StopValidation, Undefined, SchemaError,
-    Any, All, Chain)
+    Schema, InvalidBase, Invalid, InvalidGroup, StopValidation, Undefined,
+    SchemaError, Any, All, Chain)
 from validators import (
     coerce_to, in_range, in_list, require_one, require_if,
     _when_base, when_empty, when_zero, when_false, when_none,
@@ -60,19 +61,19 @@ class TestInvalid(unittest.TestCase):
 
 class TestInvalidGroup(unittest.TestCase):
     def test_creating_an_invalid_group_saves_the_passed_in_errors(self):
-        instance = InvalidGroup([1, 2])
+        instance = InvalidGroup("", [1, 2])
         self.assertEqual(instance.errors, [1, 2])
 
     def test_creating_an_invalid_group_saves_the_passed_in_data(self):
-        instance = InvalidGroup([], "abc")
+        instance = InvalidGroup("", [], "abc")
         self.assertEqual(instance.data, "abc")
 
     def test_invalid_group_returns_all_error_messages_as_its_str(self):
-        instance = InvalidGroup([Invalid("a", path=[1]), Invalid("b")])
+        instance = InvalidGroup("", [Invalid("a", path=[1]), Invalid("b")])
         self.assertEqual(str(instance), "a @ data[1]\nb")
 
     def test_invalid_group_repr_returns_invalid_group_object(self):
-        instance = InvalidGroup([Invalid("a", path=[1]), Invalid("b")])
+        instance = InvalidGroup("", [Invalid("a", path=[1]), Invalid("b")])
         self.assertEqual(
             repr(instance),
             "InvalidGroup([Invalid(\"a\", [1]), Invalid(\"b\", [])])")
@@ -99,7 +100,7 @@ class TestSchema(unittest.TestCase):
                 instance = Schema({"a": int})
                 instance({"a": 1})
             self.assertEqual(map(str, cm.exception.errors), ["abc"])
-        invalid = InvalidGroup([Invalid("def"), Invalid("ghi")])
+        invalid = InvalidGroup("", [Invalid("def"), Invalid("ghi")])
         mocked = Mock(side_effect=invalid)
         with patch.object(Schema, "_validate", mocked):
             with self.assertRaises(InvalidGroup) as cm:
@@ -474,34 +475,34 @@ class TestSchemaValidateFunction(unittest.TestCase):
         self.assertEqual(Schema._validate_function(func, "abc", []), 1)
 
     def test_validate_function_catches_and_raises_invalid(self):
-        invalid = Invalid("abc")
+        invalid = Invalid("abc", 4)
         func = Mock(side_effect=invalid)
         with self.assertRaises(Invalid) as cm:
             Schema._validate_function(func, 2, [])
         self.assertEqual(str(cm.exception), "abc")
-        self.assertEqual(cm.exception.data, 2)
+        self.assertEqual(cm.exception.data, 4)
         with self.assertRaises(Invalid) as cm:
             Schema._validate_function(func, 3, [1, "a"])
         self.assertEqual(str(cm.exception), "abc @ data[1][a]")
-        self.assertEqual(cm.exception.data, 3)
+        self.assertEqual(cm.exception.data, 4)
 
     def test_validate_function_catches_and_raises_invalid_group(self):
         invalid_group = InvalidGroup(
-            [Invalid("abc"), Invalid("def", path=[3])])
+            "", [Invalid("abc", 8), Invalid("def", 9, [3])], 4)
         func = Mock(side_effect=invalid_group)
         with self.assertRaises(InvalidGroup) as cm:
             Schema._validate_function(func, 2, [])
         ex = cm.exception
         self.assertEqual(map(str, ex.errors), ["abc", "def @ data[3]"])
-        self.assertEqual([e.data for e in ex.errors], [2, 2])
-        self.assertEqual(ex.data, 2)
+        self.assertEqual([e.data for e in ex.errors], [8, 9])
+        self.assertEqual(ex.data, 4)
         with self.assertRaises(InvalidGroup) as cm:
             Schema._validate_function(func, 3, [1, "a"])
         ex = cm.exception
         self.assertEqual(
             map(str, ex.errors), ["abc @ data[1][a]", "def @ data[1][a][3]"])
-        self.assertEqual([e.data for e in ex.errors], [3, 3])
-        self.assertEqual(ex.data, 3)
+        self.assertEqual([e.data for e in ex.errors], [8, 9])
+        self.assertEqual(ex.data, 4)
 
     def test_validate_function_catches_value_errors_and_raises_invalid(self):
         func = Mock(side_effect=ValueError)
@@ -670,12 +671,12 @@ class TestCoerceTo(unittest.TestCase):
         with self.assertRaises(Invalid) as cm:
             c = coerce_to(int)
             c("abc")
-        self.assertEqual(str(cm.exception), "expected int")
+        self.assertEqual(str(cm.exception), "Expected int")
 
         with self.assertRaises(Invalid) as cm:
             c = coerce_to(float)
             c(None)
-        self.assertEqual(str(cm.exception), "expected float")
+        self.assertEqual(str(cm.exception), "Expected float")
 
     def test_coerce_to_does_not_coerce_undefined(self):
         c = coerce_to(int)
@@ -693,8 +694,8 @@ class TestRequireOne(unittest.TestCase):
             "d": Invalid("d"), "e": 2, "f": 3
         }
         req = require_one("a", "b", "d", "f")
-        with self.assertRaises(Invalid) as cm:
-            req(InvalidGroup([data["a"], data["c"], data["d"]], data))
+        with self.assertRaises(InvalidGroup) as cm:
+            req(InvalidGroup("", [data["a"], data["c"], data["d"]], data))
         self.assertEqual(str(cm.exception), "c")
         self.assertEqual(cm.exception.data, {"b": 1, "c": data["c"], "e": 2})
 
@@ -704,7 +705,7 @@ class TestRequireOne(unittest.TestCase):
             "d": Invalid("d"), "e": 2, "f": 3
         }
         req = require_one("a", "b", "d", "f")
-        val = req(InvalidGroup([data["a"], data["d"]], data))
+        val = req(InvalidGroup("", [data["a"], data["d"]], data))
         self.assertEqual(val, {"b": 1, "c": "abc", "e": 2})
 
     def test_require_one_returns_data_with_data_removed(self):
@@ -718,14 +719,14 @@ class TestRequireIf(unittest.TestCase):
     def test_require_if_returns_an_invalid_group_with_invalids_removed(self):
         data = {"a": Invalid("a"), "b": 1, "c": Invalid("c"), "d": 2}
         req = require_if("a", Mock(return_value=False))
-        with self.assertRaises(Invalid) as cm:
-            req(InvalidGroup([data["a"], data["c"]], data))
+        with self.assertRaises(InvalidGroup) as cm:
+            req(InvalidGroup("", [data["a"], data["c"]], data))
         self.assertEqual(str(cm.exception), "c")
         self.assertEqual(cm.exception.data, {"b": 1, "c": data["c"], "d": 2})
         data = {"a": Invalid("a"), "b": 1, "c": Invalid("c"), "d": 2}
         req = require_if("a", Mock(return_value=True))
-        with self.assertRaises(Invalid) as cm:
-            req(InvalidGroup([data["a"], data["c"]], data))
+        with self.assertRaises(InvalidGroup) as cm:
+            req(InvalidGroup("", [data["a"], data["c"]], data))
         self.assertEqual(str(cm.exception), "a\nc")
         self.assertEqual(
             cm.exception.data,
@@ -734,7 +735,7 @@ class TestRequireIf(unittest.TestCase):
     def test_require_one_returns_data_with_invalids_removed(self):
         data = {"a": Invalid("a"), "b": 1, "c": "abc", "d": 2}
         req = require_if("a", Mock(return_value=False))
-        val = req(InvalidGroup([data["a"]], data))
+        val = req(InvalidGroup("", [data["a"]], data))
         self.assertEqual(val, {"b": 1, "c": "abc", "d": 2})
 
     def test_require_one_returns_data_with_data_removed(self):
@@ -758,7 +759,7 @@ class TestWhenValidators(unittest.TestCase):
         val = _when_base(None, Invalid("abc"))
         self.assertTrue(isinstance(val, Invalid))
         self.assertEqual(str(val), "abc")
-        val = _when_base(None, InvalidGroup([Invalid("a"), Invalid("b")]))
+        val = _when_base(None, InvalidGroup("", [Invalid("a"), Invalid("b")]))
         self.assertTrue(isinstance(val, InvalidGroup))
         self.assertEqual(str(val), "a\nb")
 
@@ -926,7 +927,7 @@ class TestIntegration(unittest.TestCase):
             return data
 
         def check_required_by(data):
-            return data["required_by_type"] == "later"
+            return "required_by_type" in data and data["required_by_type"] == "later"
         s = Schema(
             Chain(
                 {
@@ -975,8 +976,26 @@ class TestIntegration(unittest.TestCase):
                 "date_required_by": 1234
             })
 
+        # s = Schema(
+        #     Chain(
+        #         {
+        #             "projects": All(
+        #                 [{
+        #                     "id": All(int, when_empty(Undefined)),
+        #                     "project_id": All(int, when_empty(Invalid)),
+        #                     "percentage": All(
+        #                         int, in_range(1, 100), when_empty(Invalid))
+        #                 }],
+        #                 percents_add_to_100
+        #             ),
+        #             "vendor": All(str, when_empty(Invalid)),
+        #             "vendor_id": All(int, when_empty(Invalid)),
+        #             "required_by_type": All(str, in_list(["now", "later"])),
+        #             "date_required_by": All(int, when_empty(Invalid))
+        #         },
+        #         require_one("vendor_id", "vendor"),
+        #         require_if("date_required_by", check_required_by)))
         # with self.assertRaises(InvalidGroup) as cm:
-        #     s({
-        #         "description": "abc",
-        #         "is_tech_purchase"
-        #         })
+        #     val = s({
+        #         "projects": [{"project_id": "abc"}, 2, 3]
+        #     })
